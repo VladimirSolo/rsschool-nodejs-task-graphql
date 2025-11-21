@@ -1,5 +1,6 @@
 import {
   GraphQLObjectType,
+  GraphQLSchema,
   GraphQLString,
   GraphQLInt,
   GraphQLFloat,
@@ -8,6 +9,8 @@ import {
   GraphQLNonNull,
   GraphQLEnumType,
   GraphQLInputObjectType,
+  GraphQLResolveInfo,
+  Kind,
 } from 'graphql';
 import type { PrismaClient, User, Post, Profile, MemberType } from '@prisma/client';
 import DataLoader from 'dataloader';
@@ -39,6 +42,24 @@ interface GraphQLContext {
     userSubscribedTo: DataLoader<string, User[]>;
     subscribedToUser: DataLoader<string, User[]>;
   };
+}
+
+function parseIncludesFromInfo(info: GraphQLResolveInfo): Record<string, boolean> {
+  const includes: Record<string, boolean> = {};
+
+  const selections = info.fieldNodes[0]?.selectionSet?.selections;
+  if (!selections) return includes;
+
+  for (const selection of selections) {
+    if (selection.kind === Kind.FIELD) {
+      const fieldName = selection.name.value;
+      if (selection.selectionSet) {
+        includes[fieldName] = true;
+      }
+    }
+  }
+
+  return includes;
 }
 
 const MemberTypeIdEnum = new GraphQLEnumType({
@@ -261,3 +282,202 @@ export function createLoaders(prisma: PrismaClient) {
     }),
   };
 }
+
+const QueryType = new GraphQLObjectType({
+  name: 'Query',
+  fields: {
+    user: {
+      type: UserType,
+      args: { id: { type: new GraphQLNonNull(UUIDType) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        return context.prisma.user.findUnique({ where: { id: args.id } });
+      },
+    },
+    post: {
+      type: PostType,
+      args: { id: { type: new GraphQLNonNull(UUIDType) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        return context.prisma.post.findUnique({ where: { id: args.id } });
+      },
+    },
+    profile: {
+      type: ProfileType,
+      args: { id: { type: new GraphQLNonNull(UUIDType) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        return context.prisma.profile.findUnique({ where: { id: args.id } });
+      },
+    },
+    memberType: {
+      type: MemberTypeType,
+      args: { id: { type: new GraphQLNonNull(MemberTypeIdEnum) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        return context.prisma.memberType.findUnique({ where: { id: args.id } });
+      },
+    },
+    users: {
+      type: new GraphQLList(UserType),
+      resolve: async (_parent: unknown, _args: unknown, context: GraphQLContext, info: GraphQLResolveInfo) => {
+        const includes = parseIncludesFromInfo(info);
+        return context.prisma.user.findMany({
+          include: {
+            subscribedToUser: includes.subscribedToUser || false,
+            userSubscribedTo: includes.userSubscribedTo || false,
+            posts: includes.posts || false,
+            profile: includes.profile ? {
+              include: {
+                memberType: true,
+              },
+            } : false,
+          },
+        });
+      },
+    },
+    posts: {
+      type: new GraphQLList(PostType),
+      resolve: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+        return context.prisma.post.findMany();
+      },
+    },
+    profiles: {
+      type: new GraphQLList(ProfileType),
+      resolve: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+        return context.prisma.profile.findMany();
+      },
+    },
+    memberTypes: {
+      type: new GraphQLList(MemberTypeType),
+      resolve: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+        return context.prisma.memberType.findMany();
+      },
+    },
+  },
+});
+
+const MutationType = new GraphQLObjectType({
+  name: 'Mutation',
+  fields: {
+    createUser: {
+      type: UserType,
+      args: { dto: { type: new GraphQLNonNull(CreateUserInput) } },
+      resolve: async (_parent: unknown, args: { dto: { name: string; balance: number } }, context: GraphQLContext) => {
+        return context.prisma.user.create({ data: args.dto });
+      },
+    },
+    createPost: {
+      type: PostType,
+      args: { dto: { type: new GraphQLNonNull(CreatePostInput) } },
+      resolve: async (_parent: unknown, args: { dto: { title: string; content: string; authorId: string } }, context: GraphQLContext) => {
+        return context.prisma.post.create({ data: args.dto });
+      },
+    },
+    createProfile: {
+      type: ProfileType,
+      args: { dto: { type: new GraphQLNonNull(CreateProfileInput) } },
+      resolve: async (_parent: unknown, args: { dto: { isMale: boolean; yearOfBirth: number; userId: string; memberTypeId: string } }, context: GraphQLContext) => {
+        return context.prisma.profile.create({ data: args.dto });
+      },
+    },
+    changeUser: {
+      type: UserType,
+      args: {
+        id: { type: new GraphQLNonNull(UUIDType) },
+        dto: { type: new GraphQLNonNull(ChangeUserInput) },
+      },
+      resolve: async (_parent: unknown, args: { id: string; dto: { name?: string; balance?: number } }, context: GraphQLContext) => {
+        return context.prisma.user.update({
+          where: { id: args.id },
+          data: args.dto,
+        });
+      },
+    },
+    changePost: {
+      type: PostType,
+      args: {
+        id: { type: new GraphQLNonNull(UUIDType) },
+        dto: { type: new GraphQLNonNull(ChangePostInput) },
+      },
+      resolve: async (_parent: unknown, args: { id: string; dto: { title?: string; content?: string } }, context: GraphQLContext) => {
+        return context.prisma.post.update({
+          where: { id: args.id },
+          data: args.dto,
+        });
+      },
+    },
+    changeProfile: {
+      type: ProfileType,
+      args: {
+        id: { type: new GraphQLNonNull(UUIDType) },
+        dto: { type: new GraphQLNonNull(ChangeProfileInput) },
+      },
+      resolve: async (_parent: unknown, args: { id: string; dto: { isMale?: boolean; yearOfBirth?: number; userId?: string; memberTypeId?: string } }, context: GraphQLContext) => {
+        return context.prisma.profile.update({
+          where: { id: args.id },
+          data: args.dto,
+        });
+      },
+    },
+    deleteUser: {
+      type: GraphQLBoolean,
+      args: { id: { type: new GraphQLNonNull(UUIDType) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        await context.prisma.user.delete({ where: { id: args.id } });
+        return true;
+      },
+    },
+    deletePost: {
+      type: GraphQLBoolean,
+      args: { id: { type: new GraphQLNonNull(UUIDType) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        await context.prisma.post.delete({ where: { id: args.id } });
+        return true;
+      },
+    },
+    deleteProfile: {
+      type: GraphQLBoolean,
+      args: { id: { type: new GraphQLNonNull(UUIDType) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        await context.prisma.profile.delete({ where: { id: args.id } });
+        return true;
+      },
+    },
+    subscribeTo: {
+      type: GraphQLBoolean,
+      args: {
+        userId: { type: new GraphQLNonNull(UUIDType) },
+        authorId: { type: new GraphQLNonNull(UUIDType) },
+      },
+      resolve: async (_parent: unknown, args: { userId: string; authorId: string }, context: GraphQLContext) => {
+        await context.prisma.subscribersOnAuthors.create({
+          data: {
+            subscriberId: args.userId,
+            authorId: args.authorId,
+          },
+        });
+        return true;
+      },
+    },
+    unsubscribeFrom: {
+      type: GraphQLBoolean,
+      args: {
+        userId: { type: new GraphQLNonNull(UUIDType) },
+        authorId: { type: new GraphQLNonNull(UUIDType) },
+      },
+      resolve: async (_parent: unknown, args: { userId: string; authorId: string }, context: GraphQLContext) => {
+        await context.prisma.subscribersOnAuthors.delete({
+          where: {
+            subscriberId_authorId: {
+              subscriberId: args.userId,
+              authorId: args.authorId,
+            },
+          },
+        });
+        return true;
+      },
+    },
+  },
+});
+
+export const schema = new GraphQLSchema({
+  query: QueryType,
+  mutation: MutationType,
+});
